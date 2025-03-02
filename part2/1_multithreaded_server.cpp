@@ -10,6 +10,8 @@
 #include <iostream>
 #include <cstring>
 #include <pthread.h>
+#include <array>
+
 using namespace std;
 
 char response[] = "HTTP/1.1 200 OK\r\n"
@@ -25,11 +27,68 @@ struct thread_data
     int client_fd;
 };
 
+// void *thread_job(void *arg)
+// {
+//     thread_data *par = (struct thread_data *)arg;
+//     int client_fd = par->client_fd;
+//     write(client_fd, response, strlen(response) * sizeof(char));
+//     close(client_fd);
+//     return NULL;
+// }
+
+// void *thread_job(void *arg)
+// {
+//     thread_data *par = (thread_data *)arg;
+//     int client_fd = par->client_fd;
+
+//     write(client_fd, response, strlen(response) * sizeof(char));
+
+//     shutdown(client_fd, SHUT_WR);
+//     close(client_fd);
+
+//     delete par;
+//     return NULL;
+// }
+
 void *thread_job(void *arg)
 {
     thread_data *par = (struct thread_data *)arg;
     int client_fd = par->client_fd;
-    write(client_fd, response, strlen(response) * sizeof(char));
+
+    std::array<char, 1024> request_buffer{};
+
+    ssize_t bytes_received = recv(par->client_fd, request_buffer.data(),
+                                  request_buffer.size() - 1, 0);
+    if (bytes_received < 0)
+    {
+        throw std::runtime_error("Failed to receive client request: " +
+                                 std::string(strerror(errno)));
+    }
+
+    std::string response =
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: text/html; charset=UTF-8\r\n"
+        "Connection: close\r\n"
+        "Content-Length: ";
+
+    std::string body =
+        "<!DOCTYPE html>"
+        "<html><head><title>Bye-bye baby bye-bye</title></head>"
+        "<body><h1>Goodbye, world!</p>"
+        "</body></html>\r\n";
+
+    response += std::to_string(body.length()) + "\r\n\r\n" + body;
+
+    ssize_t bytes_sent = send(par->client_fd, response.c_str(),
+                              response.length(), 0);
+    if (bytes_sent < 0)
+    {
+        throw std::runtime_error("Failed to send response: " +
+                                 std::string(strerror(errno)));
+    }
+
+    shutdown(par->client_fd, SHUT_RDWR);
+
     close(client_fd);
     return NULL;
 }
@@ -74,39 +133,63 @@ int main()
         exit(-1);
     }
 
-    err = pthread_attr_setstacksize(&thread_attr, 0.5 * 1024 * 1024); // Задать размер стека
+    err = pthread_attr_setstacksize(&thread_attr, 0.5 * 1024 * 1024);
     if (err != 0)
     {
         perror("Cannot create stack for thread");
         exit(-1);
     }
 
+    // while (1)
+    // {
+    //     client_fd = accept(sock, (struct sockaddr *)&cli_addr, &sin_len);
+    //     printf("got connection\n");
+
+    //     if (client_fd == -1)
+    //     {
+    //         perror("Can't accept");
+    //         continue;
+    //     }
+
+    //     // Устанавливаем параметры потока.
+    //     pthread_t thread;
+    //     thread_data *data = new thread_data{client_fd};
+    //     // Создаём поток.
+    //     int err = pthread_create(&thread, NULL, thread_job, data);
+    //     if (err != 0)
+    //     {
+    //         cout << "Cannot create a thread: " << strerror(err) << endl;
+    //         close(client_fd);
+    //         delete data;
+    //         continue;
+    //     }
+
+    //     pthread_detach(thread);
+    //     pthread_attr_destroy(&thread_attr);
+    // }
+
     while (1)
     {
-        client_fd = accept(sock, (struct sockaddr *)&cli_addr, &sin_len);
-        printf("got connection\n");
-
+        client_fd = accept(sock, (sockaddr *)&cli_addr, &sin_len);
         if (client_fd == -1)
         {
             perror("Can't accept");
             continue;
         }
 
-        // Устанавливаем параметры потока.
-        pthread_t thread;
         thread_data *data = new thread_data{client_fd};
-        // Создаём поток.
-        int err = pthread_create(&thread, NULL, thread_job, data);
+        pthread_t thread;
+        int err = pthread_create(&thread, &thread_attr, thread_job, data);
+
         if (err != 0)
         {
-            cout << "Cannot create a thread: " << strerror(err) << endl;
+            cerr << "Thread creation error: " << strerror(err) << endl;
+            shutdown(client_fd, SHUT_WR);
             close(client_fd);
             delete data;
-            continue;
         }
-
-        pthread_detach(thread);
-        pthread_attr_destroy(&thread_attr);
     }
-    pthread_exit(NULL);
+
+    // pthread_exit(NULL);
+    return 0;
 }
